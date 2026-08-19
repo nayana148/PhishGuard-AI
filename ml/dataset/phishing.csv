@@ -1,0 +1,16 @@
+url,label
+http://192.168.1.10/login,1
+http://google-login.example.com,1
+http://paypal-verify.example.com,1
+http://microsoft-security.example.com,1
+http://apple-id-verify.example.com,1
+http://amazon-account-verify.example.com,1
+http://facebook-login.example.com,1
+http://instagram-security.example.com,1
+http://github-login.example.com,1
+http://secure-login.example.com,1
+http://verify-account.example.com,1
+http://update-password.example.com,1
+http://payment-verification.example.com,1
+http://account-suspended.example.com,1
+http://192.168.0.1/secure/login,1
