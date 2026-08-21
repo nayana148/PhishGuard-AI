@@ -1,23 +1,63 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import "./App.css";
+
+const HISTORY_KEY = "phishguard_scan_history";
 
 function App() {
   const [url, setUrl] = useState("");
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [history, setHistory] = useState([]);
+  const [error, setError] = useState("");
+
+  const [scanHistory, setScanHistory] = useState(() => {
+    try {
+      const saved = localStorage.getItem(HISTORY_KEY);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem(
+      HISTORY_KEY,
+      JSON.stringify(scanHistory)
+    );
+  }, [scanHistory]);
+
+  const getRiskClass = (risk) => {
+    const value = String(risk || "").toUpperCase();
+
+    if (value.includes("HIGH")) return "high-risk";
+    if (value.includes("MEDIUM")) return "medium-risk";
+    return "low-risk";
+  };
+
+  const getRiskIcon = (risk) => {
+    const value = String(risk || "").toUpperCase();
+
+    if (value.includes("HIGH")) return "🔴";
+    if (value.includes("MEDIUM")) return "🟠";
+    return "🟢";
+  };
+
+  const getRiskLabel = (risk) => {
+    const value = String(risk || "").toUpperCase();
+
+    if (value.includes("HIGH")) return "HIGH RISK";
+    if (value.includes("MEDIUM")) return "MEDIUM RISK";
+    return "LOW RISK";
+  };
 
   const checkUrl = async () => {
     if (!url.trim()) {
-      setResult({
-        type: "warning",
-        message: "Please enter a URL to check.",
-        warnings: []
-      });
+      setError("Please enter a URL.");
+      setResult(null);
       return;
     }
 
     setLoading(true);
+    setError("");
     setResult(null);
 
     try {
@@ -26,424 +66,614 @@ function App() {
         {
           method: "POST",
           headers: {
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
           },
-          body: JSON.stringify({ url })
+          body: JSON.stringify({
+            url: url.trim(),
+          }),
         }
       );
 
       const data = await response.json();
 
-      if (!response.ok) {
+      if (!response.ok || data.error) {
         throw new Error(
-          data.error || "Something went wrong"
+          data.error || "URL analysis failed"
         );
       }
 
-      const scanResult = {
-        type:
-          data.risk === "HIGH"
-            ? "danger"
-            : data.risk === "MEDIUM"
-              ? "warning"
-              : "safe",
+      setResult(data);
 
-        message: `${data.risk} RISK — Score: ${data.score}/100`,
+      const historyItem = {
+        id: Date.now(),
 
-        score: data.score,
+        url: data.url || url.trim(),
 
-        risk: data.risk,
+        final_resolved_url:
+          data.final_resolved_url || "",
 
-        warnings: data.warnings || []
+        risk: data.risk || "LOW RISK",
+
+        score: Number(data.score) || 0,
+
+        phishing_probability:
+          data.phishing_probability !== undefined &&
+          data.phishing_probability !== null
+            ? Number(data.phishing_probability)
+            : null,
+
+        warnings: Array.isArray(data.warnings)
+          ? data.warnings
+          : [],
+
+        security_checks:
+          data.security_checks || {},
+
+        brand_impersonation:
+          data.brand_impersonation || null,
+
+        legitimate_domain:
+          data.legitimate_domain || false,
+
+        official_brand:
+          data.official_brand || null,
+
+        official_domain:
+          data.official_domain || null,
+
+        timestamp:
+          new Date().toLocaleString(),
       };
 
-      setResult(scanResult);
+      setScanHistory((previous) => [
+        historyItem,
+        ...previous,
+      ]);
+    } catch (err) {
+      console.error(err);
 
-      const newHistoryItem = {
-        url,
-        risk: data.risk,
-        score: data.score
-      };
-
-      setHistory((previousHistory) => [
-        newHistoryItem,
-        ...previousHistory
-      ].slice(0, 10));
-
-    } catch (error) {
-      setResult({
-        type: "danger",
-        message: "Backend is not reachable.",
-        warnings: []
-      });
+      setError(
+        err.message ||
+          "Backend unreachable. Make sure the backend is running."
+      );
     } finally {
       setLoading(false);
     }
   };
 
-  const clearScan = () => {
+  const clearResult = () => {
     setUrl("");
     setResult(null);
+    setError("");
   };
 
   const clearHistory = () => {
-    setHistory([]);
+    if (
+      window.confirm(
+        "Are you sure you want to clear all scan history?"
+      )
+    ) {
+      setScanHistory([]);
+    }
   };
 
-  const scanFromHistory = (historyUrl) => {
-    setUrl(historyUrl);
+  const deleteHistoryItem = (id) => {
+    setScanHistory((previous) =>
+      previous.filter((item) => item.id !== id)
+    );
   };
 
-  const totalScans = history.length;
+  const viewHistoryItem = (item) => {
+    setUrl(item.url);
 
-  const safeScans = history.filter(
-    (item) => item.risk === "LOW"
-  ).length;
+    setResult({
+      url: item.url,
 
-  const threatScans = history.filter(
-    (item) =>
-      item.risk === "MEDIUM" ||
-      item.risk === "HIGH"
-  ).length;
+      final_resolved_url:
+        item.final_resolved_url,
+
+      risk: item.risk,
+
+      score: item.score,
+
+      phishing_probability:
+        item.phishing_probability,
+
+      warnings: item.warnings,
+
+      security_checks:
+        item.security_checks,
+
+      brand_impersonation:
+        item.brand_impersonation,
+
+      legitimate_domain:
+        item.legitimate_domain,
+
+      official_brand:
+        item.official_brand,
+
+      official_domain:
+        item.official_domain,
+    });
+
+    setError("");
+
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth",
+    });
+  };
+
+  const useDemoUrl = (demoUrl) => {
+    setUrl(demoUrl);
+    setResult(null);
+    setError("");
+  };
+
+  const score = Math.min(
+    100,
+    Math.max(0, Number(result?.score) || 0)
+  );
 
   return (
     <div className="app">
 
-      <header className="navbar">
+      {/* HEADER */}
+      <header className="header">
+        <div className="logo">🛡️</div>
 
-        <div className="logo">
-          🛡️ PhishGuard
+        <div>
+          <h1>PhishGuard-AI</h1>
+          <p>
+            AI-Powered Phishing URL Detection
+          </p>
         </div>
-
-        <span className="tagline">
-          AI-Powered Phishing Detection
-        </span>
-
       </header>
 
+      <main className="main">
 
-      <main className="hero">
-
-        <div className="hero-content">
-
-          <h1>
-            Detect Phishing.
-            <br />
-            <span>Stay Protected.</span>
-          </h1>
+        {/* INTRO */}
+        <section className="intro">
+          <h2>Check if a URL is safe</h2>
 
           <p>
-            Analyze suspicious URLs and identify
-            potential phishing threats before they
-            put your information at risk.
+            Enter a website URL and PhishGuard-AI
+            will analyze it using machine learning,
+            security heuristics and phishing indicators.
           </p>
+        </section>
 
-
-          <div className="scanner">
-
-            <input
-              type="text"
-              placeholder="Enter a suspicious URL..."
-              value={url}
-              onChange={(e) =>
-                setUrl(e.target.value)
+        {/* SEARCH */}
+        <div className="search-box">
+          <input
+            type="text"
+            value={url}
+            disabled={loading}
+            onChange={(e) => setUrl(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                checkUrl();
               }
-              disabled={loading}
-            />
+            }}
+            placeholder="Enter URL, e.g. https://google.com"
+          />
+
+          <button
+            className="check-button"
+            onClick={checkUrl}
+            disabled={loading}
+          >
+            {loading ? "Checking..." : "🔍 Check URL"}
+          </button>
+
+          <button
+            className="clear-button"
+            onClick={clearResult}
+            disabled={loading}
+          >
+            Clear
+          </button>
+        </div>
+
+        {/* ERROR */}
+        {error && (
+          <div className="error-box">
+            ⚠️ {error}
+          </div>
+        )}
+
+        {/* LOADING */}
+        {loading && (
+          <div className="loading-box">
+            <div className="spinner"></div>
+
+            <p>Analyzing URL...</p>
+
+            <span>
+              Checking ML prediction, HTTPS,
+              redirects and suspicious patterns.
+            </span>
+          </div>
+        )}
+
+        {/* RESULT */}
+        {result && !loading && (
+          <div
+            className={`result-card ${getRiskClass(
+              result.risk
+            )}`}
+          >
+
+            <div className="result-header">
+              <h2>
+                {getRiskIcon(result.risk)}{" "}
+                {getRiskLabel(result.risk)}
+              </h2>
+
+              <div className="score">
+                Score: {score}/100
+              </div>
+            </div>
+
+            {/* RISK BAR */}
+            <div className="risk-bar">
+              <div
+                className="risk-fill"
+                style={{
+                  width: `${score}%`,
+                }}
+              ></div>
+            </div>
+
+            <div className="risk-labels">
+              <span>Safe</span>
+              <span>Risk</span>
+            </div>
+
+            {/* ANALYZED URL */}
+            <div className="url-info">
+              <div className="info-title">
+                Analyzed URL
+              </div>
+
+              <div className="url-value">
+                {result.url}
+              </div>
+            </div>
+
+            {/* FINAL DESTINATION */}
+            {result.final_resolved_url &&
+              result.final_resolved_url !==
+                result.url && (
+                <div className="url-info">
+                  <div className="info-title">
+                    Final Destination
+                  </div>
+
+                  <div className="url-value">
+                    {result.final_resolved_url}
+                  </div>
+                </div>
+              )}
+
+            {/* ML PROBABILITY */}
+            {result.phishing_probability !==
+              undefined &&
+              result.phishing_probability !== null && (
+                <div className="probability-box">
+                  <span>
+                    ML Phishing Probability
+                  </span>
+
+                  <strong>
+                    {Number(
+                      result.phishing_probability
+                    ).toFixed(1)}
+                    %
+                  </strong>
+                </div>
+              )}
+
+            {/* SECURITY CHECKS */}
+            {result.security_checks && (
+              <div className="checks-section">
+                <h3>Security Checks</h3>
+
+                <div className="checks-grid">
+
+                  <div className="check-item">
+                    <span>HTTPS</span>
+                    <strong>
+                      {result.security_checks.https
+                        ? "✓ Secure"
+                        : "✗ Not Secure"}
+                    </strong>
+                  </div>
+
+                  <div className="check-item">
+                    <span>Redirect</span>
+                    <strong>
+                      {result.security_checks
+                        .redirect_detected
+                        ? "⚠ Detected"
+                        : "✓ None"}
+                    </strong>
+                  </div>
+
+                  <div className="check-item">
+                    <span>IP Address</span>
+                    <strong>
+                      {result.security_checks
+                        .ip_address_detected
+                        ? "⚠ Detected"
+                        : "✓ None"}
+                    </strong>
+                  </div>
+
+                  <div className="check-item">
+                    <span>@ Symbol</span>
+                    <strong>
+                      {result.security_checks
+                        .at_symbol_detected
+                        ? "⚠ Detected"
+                        : "✓ None"}
+                    </strong>
+                  </div>
+
+                  <div className="check-item">
+                    <span>Typosquatting</span>
+                    <strong>
+                      {result.security_checks
+                        .typosquatting_detected
+                        ? "⚠ Detected"
+                        : "✓ None"}
+                    </strong>
+                  </div>
+
+                  <div className="check-item">
+                    <span>Brand Impersonation</span>
+                    <strong>
+                      {result.security_checks
+                        .brand_impersonation_detected
+                        ? "⚠ Detected"
+                        : "✓ None"}
+                    </strong>
+                  </div>
+
+                </div>
+              </div>
+            )}
+
+            {/* BRAND INFO */}
+            {result.brand_impersonation && (
+              <div className="brand-warning">
+                <strong>⚠️ Brand Impersonation</strong>
+
+                <p>
+                  Possible{" "}
+                  {result.brand_impersonation.attack_type ||
+                    "brand"}{" "}
+                  impersonating{" "}
+                  {result.brand_impersonation.brand ||
+                    "a trusted brand"}.
+                </p>
+              </div>
+            )}
+
+            {/* OFFICIAL DOMAIN */}
+            {result.legitimate_domain &&
+              result.official_brand && (
+                <div className="official-message">
+                  ✓ Known legitimate domain:{" "}
+                  {result.official_brand}
+                </div>
+              )}
+
+            {/* WARNINGS */}
+            {result.warnings &&
+              result.warnings.length > 0 && (
+                <div className="warnings-section">
+                  <h3>⚠️ Security Warnings</h3>
+
+                  <ul>
+                    {result.warnings.map(
+                      (warning, index) => (
+                        <li key={index}>
+                          {warning}
+                        </li>
+                      )
+                    )}
+                  </ul>
+                </div>
+              )}
+
+            {/* SAFE */}
+            {(!result.warnings ||
+              result.warnings.length === 0) &&
+              !result.brand_impersonation && (
+                <div className="safe-message">
+                  ✓ No suspicious security
+                  indicators were detected.
+                </div>
+              )}
+
+          </div>
+        )}
+
+        {/* DEMO */}
+        <section className="demo-section">
+          <h3>Try these examples</h3>
+
+          <div className="demo-buttons">
 
             <button
-              onClick={checkUrl}
-              disabled={loading}
+              onClick={() =>
+                useDemoUrl(
+                  "https://google.com"
+                )
+              }
             >
-              {loading
-                ? "🔄 Analyzing..."
-                : "🔍 Check URL"}
+              🟢 Safe
             </button>
 
             <button
-              className="clear-button"
-              onClick={clearScan}
-              disabled={loading}
+              onClick={() =>
+                useDemoUrl(
+                  "https://g00gle.com"
+                )
+              }
             >
-              Clear
+              🔴 Typosquatting
+            </button>
+
+            <button
+              onClick={() =>
+                useDemoUrl(
+                  "https://example.com/login/verify"
+                )
+              }
+            >
+              🟠 Suspicious
+            </button>
+
+            <button
+              onClick={() =>
+                useDemoUrl(
+                  "https://nayan@.com"
+                )
+              }
+            >
+              🔴 @ Symbol
             </button>
 
           </div>
+        </section>
 
+        {/* HISTORY */}
+        <section className="history-section">
 
-          {result && (
+          <div className="history-header">
 
-            <div
-              className={`result ${result.type}`}
-            >
+            <div>
+              <h2>🕘 Scan History</h2>
 
-              <h3>
-                {result.message}
-              </h3>
+              <p>
+                Previous URLs scanned by
+                PhishGuard-AI
+              </p>
+            </div>
 
+            {scanHistory.length > 0 && (
+              <button
+                className="clear-history-button"
+                onClick={clearHistory}
+              >
+                🗑️ Clear History
+              </button>
+            )}
 
-              {result.score !== undefined && (
+          </div>
 
-                <div className="risk-meter">
+          {scanHistory.length === 0 ? (
+            <div className="empty-history">
+              <div className="empty-history-icon">
+                🕘
+              </div>
 
-                  <div className="meter-track">
+              <h3>No scans yet</h3>
 
-                    <div
-                      className="meter-fill"
-                      style={{
-                        width:
-                          `${result.score}%`
-                      }}
-                    ></div>
+              <p>
+                Your scanned URLs will appear here.
+              </p>
+            </div>
+          ) : (
+            <div className="history-list">
+
+              {scanHistory.map((item) => (
+                <div
+                  className={`history-item ${getRiskClass(
+                    item.risk
+                  )}`}
+                  key={item.id}
+                >
+
+                  <div className="history-main">
+
+                    <div className="history-risk">
+                      <span>
+                        {getRiskIcon(item.risk)}
+                      </span>
+
+                      <strong>
+                        {getRiskLabel(item.risk)}
+                      </strong>
+                    </div>
+
+                    <div className="history-url">
+                      {item.url}
+                    </div>
+
+                    <div className="history-meta">
+                      <span>
+                        Score: {item.score}/100
+                      </span>
+
+                      {item.phishing_probability !==
+                        null && (
+                        <span>
+                          ML:{" "}
+                          {Number(
+                            item.phishing_probability
+                          ).toFixed(1)}
+                          %
+                        </span>
+                      )}
+
+                      <span>
+                        {item.timestamp}
+                      </span>
+                    </div>
 
                   </div>
 
+                  <div className="history-actions">
 
-                  <div className="meter-labels">
+                    <button
+                      className="view-button"
+                      onClick={() =>
+                        viewHistoryItem(item)
+                      }
+                    >
+                      View
+                    </button>
 
-                    <span>
-                      Safe
-                    </span>
-
-                    <span>
-                      Risk
-                    </span>
+                    <button
+                      className="delete-button"
+                      onClick={() =>
+                        deleteHistoryItem(item.id)
+                      }
+                    >
+                      ✕
+                    </button>
 
                   </div>
 
                 </div>
-
-              )}
-
-
-              {result.warnings &&
-                result.warnings.length > 0 && (
-
-                  <ul>
-
-                    {result.warnings.map(
-                      (warning, index) => (
-
-                        <li key={index}>
-                          {warning}
-                        </li>
-
-                      )
-                    )}
-
-                  </ul>
-
-                )}
+              ))}
 
             </div>
-
           )}
-
-        </div>
-
-      </main>
-
-
-      {history.length > 0 && (
-
-        <section className="dashboard">
-
-          <div className="stats-grid">
-
-            <div className="stat-card">
-
-              <span className="stat-icon">
-                🔎
-              </span>
-
-              <div>
-
-                <strong>
-                  {totalScans}
-                </strong>
-
-                <p>
-                  Total Scans
-                </p>
-
-              </div>
-
-            </div>
-
-
-            <div className="stat-card safe-stat">
-
-              <span className="stat-icon">
-                🟢
-              </span>
-
-              <div>
-
-                <strong>
-                  {safeScans}
-                </strong>
-
-                <p>
-                  Safe
-                </p>
-
-              </div>
-
-            </div>
-
-
-            <div className="stat-card threat-stat">
-
-              <span className="stat-icon">
-                🚨
-              </span>
-
-              <div>
-
-                <strong>
-                  {threatScans}
-                </strong>
-
-                <p>
-                  Threats
-                </p>
-
-              </div>
-
-            </div>
-
-          </div>
-
-
-          <div className="history-section">
-
-            <div className="history-header">
-
-              <h2>
-                📋 Scan History
-              </h2>
-
-              <button
-                className="clear-history"
-                onClick={clearHistory}
-              >
-                Clear History
-              </button>
-
-            </div>
-
-
-            <div className="history-list">
-
-              {history.map(
-                (item, index) => (
-
-                  <div
-                    className="history-item"
-                    key={index}
-                    onClick={() =>
-                      scanFromHistory(
-                        item.url
-                      )
-                    }
-                  >
-
-                    <div className="history-url">
-
-                      <span
-                        className={`history-indicator ${item.risk.toLowerCase()}`}
-                      >
-                      </span>
-
-                      <span>
-                        {item.url}
-                      </span>
-
-                    </div>
-
-
-                    <div className="history-risk">
-
-                      <strong>
-                        {item.risk}
-                      </strong>
-
-                      <span>
-                        {item.score}/100
-                      </span>
-
-                    </div>
-
-                  </div>
-
-                )
-              )}
-
-            </div>
-
-          </div>
 
         </section>
 
-      )}
+      </main>
 
-
-      <section className="features">
-
-        <div className="feature-card">
-
-          <div className="icon">
-            🔗
-          </div>
-
-          <h3>
-            URL Analysis
-          </h3>
-
-          <p>
-            Examines suspicious URL characteristics
-            and patterns.
-          </p>
-
-        </div>
-
-
-        <div className="feature-card">
-
-          <div className="icon">
-            🤖
-          </div>
-
-          <h3>
-            ML Detection
-          </h3>
-
-          <p>
-            Uses intelligent classification to identify
-            potentially harmful URLs.
-          </p>
-
-        </div>
-
-
-        <div className="feature-card">
-
-          <div className="icon">
-            🛡️
-          </div>
-
-          <h3>
-            Threat Protection
-          </h3>
-
-          <p>
-            Helps users identify phishing threats
-            before interacting with them.
-          </p>
-
-        </div>
-
-      </section>
+      <footer>
+        <p>
+          PhishGuard-AI • AI-powered phishing detection
+        </p>
+      </footer>
 
     </div>
   );

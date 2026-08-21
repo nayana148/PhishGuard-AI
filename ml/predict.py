@@ -1,7 +1,6 @@
 import sys
 import os
 import json
-import re
 from urllib.parse import urlsplit
 
 import joblib
@@ -36,14 +35,24 @@ if not os.path.exists(MODEL_FILE):
 
     print(json.dumps({
         "error": "model.pkl not found. Run train.py first."
-    }, indent=2))
+    }))
 
     sys.exit(1)
 
 
-model = joblib.load(
-    MODEL_FILE
-)
+try:
+
+    model = joblib.load(
+        MODEL_FILE
+    )
+
+except Exception as error:
+
+    print(json.dumps({
+        "error": f"Could not load model: {str(error)}"
+    }))
+
+    sys.exit(1)
 
 
 # ============================================================
@@ -54,18 +63,28 @@ if not os.path.exists(BRANDS_FILE):
 
     print(json.dumps({
         "error": "brands.json not found."
-    }, indent=2))
+    }))
 
     sys.exit(1)
 
 
-with open(
-    BRANDS_FILE,
-    "r",
-    encoding="utf-8"
-) as file:
+try:
 
-    BRANDS = json.load(file)
+    with open(
+        BRANDS_FILE,
+        "r",
+        encoding="utf-8"
+    ) as file:
+
+        BRANDS = json.load(file)
+
+except Exception as error:
+
+    print(json.dumps({
+        "error": f"Could not load brands.json: {str(error)}"
+    }))
+
+    sys.exit(1)
 
 
 # ============================================================
@@ -251,10 +270,8 @@ def get_registered_domain(domain):
 
         return domain
 
-    # Handle common two-part country domains
-    # such as google.co.in
-
     common_second_level = {
+
         "co.in",
         "com.au",
         "co.uk",
@@ -265,6 +282,7 @@ def get_registered_domain(domain):
         "com.sg",
         "com.my",
         "co.za"
+
     }
 
     last_two = ".".join(
@@ -302,7 +320,6 @@ def is_known_legitimate_domain(domain):
                 official_domain.lower()
             )
 
-            # Exact official domain
             if domain == official_domain:
 
                 return (
@@ -311,7 +328,6 @@ def is_known_legitimate_domain(domain):
                     official_domain
                 )
 
-            # Legitimate subdomain
             if domain.endswith(
                 "." + official_domain
             ):
@@ -373,12 +389,18 @@ def detect_impersonation(domain):
 
     best_match = None
 
+
+    # --------------------------------------------------------
+    # CHECK EACH BRAND
+    # --------------------------------------------------------
+
     for brand, official_domains in BRANDS.items():
 
         brand = brand.lower()
 
+
         # ----------------------------------------------------
-        # Exact legitimate brand
+        # SKIP REAL OFFICIAL DOMAIN
         # ----------------------------------------------------
 
         legitimate_exact = False
@@ -401,12 +423,14 @@ def detect_impersonation(domain):
 
                 break
 
+
         if legitimate_exact:
 
             continue
 
+
         # ----------------------------------------------------
-        # Similarity calculations
+        # SIMILARITY
         # ----------------------------------------------------
 
         raw_similarity = similarity(
@@ -435,43 +459,64 @@ def detect_impersonation(domain):
             brand
         )
 
+
         # ----------------------------------------------------
-        # Detection
+        # DETECTION
         # ----------------------------------------------------
 
         suspicious = False
 
         attack_type = None
 
-        # Character substitution
-        if normalized_similarity >= 0.80:
 
-            suspicious = True
+        # Number/look-alike substitution
+        if normalized_name != raw_name:
 
-            attack_type = (
-                "character substitution / lookalike"
-            )
+            if normalized_similarity >= 0.80:
 
-        # Repeated characters
-        elif compressed_similarity >= 0.90:
+                suspicious = True
 
-            suspicious = True
+                attack_type = (
+                    "homoglyph/look-alike"
+                )
 
-            attack_type = (
-                "repeated-character typosquatting"
-            )
 
-        # Small edit distance
-        elif (
-            edit_distance <= 2
-            and len(brand) >= 5
+        # Very close spelling
+        if (
+            normalized_similarity >= 0.85
+            and edit_distance <= 2
         ):
 
             suspicious = True
 
             attack_type = (
-                "character insertion/deletion/substitution"
+                "typosquatting"
             )
+
+
+        # Repeated-character manipulation
+        if compressed_similarity >= 0.90:
+
+            suspicious = True
+
+            attack_type = (
+                "repeated-character manipulation"
+            )
+
+
+        # Raw similarity
+        if raw_similarity >= 0.90:
+
+            suspicious = True
+
+            attack_type = (
+                "typosquatting"
+            )
+
+
+        # ----------------------------------------------------
+        # SAVE BEST MATCH
+        # ----------------------------------------------------
 
         if suspicious:
 
@@ -480,541 +525,309 @@ def detect_impersonation(domain):
                 "brand":
                     brand,
 
-                "official_domain":
-                    official_domains[0],
+                "attack_type":
+                    attack_type,
 
-                "raw_similarity":
+                "similarity":
                     round(
-                        raw_similarity,
-                        3
-                    ),
-
-                "normalized_similarity":
-                    round(
-                        normalized_similarity,
-                        3
-                    ),
-
-                "compressed_similarity":
-                    round(
-                        compressed_similarity,
+                        max(
+                            raw_similarity,
+                            normalized_similarity,
+                            compressed_similarity
+                        ),
                         3
                     ),
 
                 "edit_distance":
-                    edit_distance,
+                    edit_distance
 
-                "attack_type":
-                    attack_type
             }
+
 
             if (
                 best_match is None
-                or candidate[
-                    "normalized_similarity"
-                ]
+                or
+                candidate["similarity"]
                 >
-                best_match[
-                    "normalized_similarity"
-                ]
+                best_match["similarity"]
             ):
 
                 best_match = candidate
 
-    # --------------------------------------------------------
-    # Suspicious brand in subdomain
-    # --------------------------------------------------------
-
-    subdomain_parts = domain.split(
-        "."
-    )[:-2]
-
-    for brand, official_domains in BRANDS.items():
-
-        brand = brand.lower()
-
-        if brand in subdomain_parts:
-
-            # If this isn't actually an official
-            # domain, it is suspicious.
-
-            is_official = False
-
-            for official_domain in official_domains:
-
-                if domain == official_domain:
-
-                    is_official = True
-
-                elif domain.endswith(
-                    "." + official_domain
-                ):
-
-                    is_official = True
-
-            if not is_official:
-
-                candidate = {
-
-                    "brand":
-                        brand,
-
-                    "official_domain":
-                        official_domains[0],
-
-                    "raw_similarity":
-                        0.0,
-
-                    "normalized_similarity":
-                        0.0,
-
-                    "compressed_similarity":
-                        0.0,
-
-                    "edit_distance":
-                        0,
-
-                    "attack_type":
-                        "brand used in suspicious subdomain"
-                }
-
-                if best_match is None:
-
-                    best_match = candidate
 
     return best_match
 
 
 # ============================================================
-# UNICODE ANALYSIS
+# GET URL
 # ============================================================
 
-def analyze_unicode(domain):
+if len(sys.argv) < 2:
 
-    unicode_chars = [
+    print(json.dumps({
+        "error": "URL argument is required"
+    }))
 
-        char
+    sys.exit(1)
 
-        for char in domain
 
-        if ord(char) > 127
-
-    ]
-
-    return {
-
-        "unicode_detected":
-            len(unicode_chars) > 0,
-
-        "punycode_detected":
-            "xn--" in domain.lower(),
-
-        "unicode_characters":
-            len(unicode_chars)
-
-    }
+url = sys.argv[1].strip()
 
 
 # ============================================================
-# SAFE ML PREDICTION
+# NORMALIZE URL
 # ============================================================
 
-def get_ml_result(features):
+if not url.lower().startswith(
+    ("http://", "https://")
+):
 
-    try:
-
-        prediction = int(
-            model.predict(
-                [features]
-            )[0]
-        )
-
-        probabilities = (
-            model.predict_proba(
-                [features]
-            )[0]
-        )
-
-        # Our model convention:
-        # 0 = legitimate
-        # 1 = phishing
-
-        if 1 in model.classes_:
-
-            phishing_index = list(
-                model.classes_
-            ).index(1)
-
-            probability = (
-                probabilities[
-                    phishing_index
-                ] * 100
-            )
-
-        else:
-
-            probability = 100.0 if (
-                prediction == 1
-            ) else 0.0
-
-        return (
-            prediction,
-            float(probability)
-        )
-
-    except Exception:
-
-        return (
-            0,
-            0.0
-        )
+    url = "http://" + url
 
 
 # ============================================================
 # MAIN PREDICTION
 # ============================================================
 
-def predict(url):
+try:
 
     # --------------------------------------------------------
-    # Domain
-    # --------------------------------------------------------
-
-    domain = get_domain(
-        url
-    )
-
-    # --------------------------------------------------------
-    # Features
+    # EXTRACT FEATURES
     # --------------------------------------------------------
 
     features = extract_features(
         url
     )
 
+
+    # IMPORTANT:
+    # extract_features() returns a LIST,
+    # not a dictionary.
+
+    feature_values = features
+
+
     # --------------------------------------------------------
-    # Known legitimate domain
+    # ML PREDICTION
     # --------------------------------------------------------
 
-    known_legitimate, legitimate_brand, official_domain = (
+    prediction = model.predict(
+        [feature_values]
+    )[0]
+
+
+    # --------------------------------------------------------
+    # PHISHING PROBABILITY
+    # --------------------------------------------------------
+
+    phishing_probability = None
+
+
+    if hasattr(
+        model,
+        "predict_proba"
+    ):
+
+        probabilities = (
+            model.predict_proba(
+                [feature_values]
+            )[0]
+        )
+
+        classes = list(
+            model.classes_
+        )
+
+
+        phishing_index = None
+
+
+        for index, class_value in enumerate(classes):
+
+            class_string = str(
+                class_value
+            ).lower()
+
+
+            if class_string in [
+                "1",
+                "phishing",
+                "malicious",
+                "bad",
+                "true"
+            ]:
+
+                phishing_index = index
+
+                break
+
+
+        if phishing_index is not None:
+
+            phishing_probability = (
+                float(
+                    probabilities[
+                        phishing_index
+                    ]
+                )
+                * 100
+            )
+
+        elif len(probabilities) > 1:
+
+            phishing_probability = (
+                float(
+                    probabilities[-1]
+                )
+                * 100
+            )
+
+        else:
+
+            phishing_probability = (
+                float(
+                    probabilities[0]
+                )
+                * 100
+            )
+
+
+    else:
+
+        phishing_probability = (
+            100.0
+            if prediction == 1
+            else 0.0
+        )
+
+
+    phishing_probability = round(
+        phishing_probability,
+        2
+    )
+
+
+    # --------------------------------------------------------
+    # DOMAIN ANALYSIS
+    # --------------------------------------------------------
+
+    domain = get_domain(
+        url
+    )
+
+
+    legitimate, brand, official_domain = (
         is_known_legitimate_domain(
             domain
         )
     )
 
-    # --------------------------------------------------------
-    # Unicode
-    # --------------------------------------------------------
 
-    unicode_analysis = (
-        analyze_unicode(
-            domain
-        )
-    )
+    impersonation = None
 
-    # --------------------------------------------------------
-    # Impersonation
-    # --------------------------------------------------------
 
-    impersonation = (
-        detect_impersonation(
-            domain
-        )
-    )
+    if not legitimate:
 
-    # --------------------------------------------------------
-    # ML
-    # --------------------------------------------------------
-
-    ml_prediction, ml_probability = (
-        get_ml_result(
-            features
-        )
-    )
-
-    reasons = []
-
-    # ========================================================
-    # DECISION 1
-    # KNOWN LEGITIMATE DOMAIN
-    # ========================================================
-
-    if known_legitimate:
-
-        risk = "LOW"
-
-        score = 0
-
-        phishing_probability = 0.0
-
-        reasons.append(
-            "Domain matches a known legitimate domain"
-        )
-
-        return {
-
-            "risk":
-                risk,
-
-            "score":
-                score,
-
-            "phishing_probability":
-                phishing_probability,
-
-            "domain":
-                domain,
-
-            "ml_prediction":
-                ml_prediction,
-
-            "impersonation":
-                None,
-
-            "known_legitimate":
-                True,
-
-            "legitimate_brand":
-                legitimate_brand,
-
-            "official_domain":
-                official_domain,
-
-            "unicode_analysis":
-                unicode_analysis,
-
-            "features":
-                features,
-
-            "reasons":
-                reasons
-        }
-
-    # ========================================================
-    # DECISION 2
-    # IMPERSONATION
-    # ========================================================
-
-    if impersonation:
-
-        score = 90
-
-        # Stronger score for exact/near exact
-        # repeated-character attacks
-
-        if (
-            impersonation.get(
-                "compressed_similarity",
-                0
-            ) >= 0.95
-        ):
-
-            score = 95
-
-        if (
-            impersonation.get(
-                "normalized_similarity",
-                0
-            ) >= 0.90
-        ):
-
-            score = 98
-
-        risk = "HIGH"
-
-        phishing_probability = float(
-            score
-        )
-
-        reasons.append(
-            "Possible impersonation of "
-            + impersonation["brand"]
-        )
-
-        reasons.append(
-            "Domain resembles "
-            + impersonation["official_domain"]
-        )
-
-        reasons.append(
-            "Attack type: "
-            + impersonation["attack_type"]
-        )
-
-        return {
-
-            "risk":
-                risk,
-
-            "score":
-                score,
-
-            "phishing_probability":
-                phishing_probability,
-
-            "domain":
-                domain,
-
-            "ml_prediction":
-                ml_prediction,
-
-            "ml_probability":
-                round(
-                    ml_probability,
-                    2
-                ),
-
-            "impersonation":
-                impersonation,
-
-            "known_legitimate":
-                False,
-
-            "unicode_analysis":
-                unicode_analysis,
-
-            "features":
-                features,
-
-            "reasons":
-                reasons
-        }
-
-    # ========================================================
-    # DECISION 3
-    # GENERAL ML / SECURITY SIGNALS
-    # ========================================================
-
-    score = ml_probability
-
-    if ml_prediction == 1:
-
-        reasons.append(
-            "Machine-learning model detected phishing characteristics"
-        )
-
-    # --------------------------------------------------------
-    # IP address
-    # --------------------------------------------------------
-
-    if features[3]:
-
-        score = max(
-            score,
-            70
-        )
-
-        reasons.append(
-            "URL uses an IP address"
-        )
-
-    # --------------------------------------------------------
-    # @ symbol
-    # --------------------------------------------------------
-
-    if features[2]:
-
-        score = max(
-            score,
-            75
-        )
-
-        reasons.append(
-            "URL contains an @ symbol"
-        )
-
-    # --------------------------------------------------------
-    # Suspicious words
-    # --------------------------------------------------------
-
-    if features[7] > 0:
-
-        score = max(
-            score,
-            min(
-                40 + features[7] * 10,
-                75
+        impersonation = (
+            detect_impersonation(
+                domain
             )
         )
 
-        reasons.append(
-            "Suspicious account/security words detected"
-        )
 
     # --------------------------------------------------------
-    # Punycode
+    # FINAL SCORE
     # --------------------------------------------------------
 
-    if unicode_analysis[
-        "punycode_detected"
-    ]:
-
-        score = max(
-            score,
-            70
-        )
-
-        reasons.append(
-            "Domain uses Punycode"
-        )
-
-    # --------------------------------------------------------
-    # Unicode
-    # --------------------------------------------------------
-
-    if unicode_analysis[
-        "unicode_detected"
-    ]:
-
-        score = max(
-            score,
-            70
-        )
-
-        reasons.append(
-            "Domain contains Unicode characters"
-        )
-
-    # --------------------------------------------------------
-    # Final score
-    # --------------------------------------------------------
-
-    score = min(
-        round(score),
-        100
+    score = round(
+        phishing_probability
     )
 
+
     # --------------------------------------------------------
-    # Risk
+    # TYPOSQUATTING BOOST
     # --------------------------------------------------------
 
-    if score >= 60:
+    if impersonation:
 
-        risk = "HIGH"
+        score = max(
+            score,
+            85
+        )
 
-    elif score >= 30:
 
-        risk = "MEDIUM"
+    # --------------------------------------------------------
+    # LEGITIMATE DOMAIN PROTECTION
+    # --------------------------------------------------------
+
+    if legitimate:
+
+        score = min(
+            score,
+            20
+        )
+
+
+    # --------------------------------------------------------
+    # LIMIT SCORE
+    # --------------------------------------------------------
+
+    score = max(
+        0,
+        min(
+            100,
+            score
+        )
+    )
+
+
+    # --------------------------------------------------------
+    # RISK
+    # --------------------------------------------------------
+
+    if score >= 70:
+
+        risk = "HIGH RISK"
+
+    elif score >= 40:
+
+        risk = "MEDIUM RISK"
 
     else:
 
-        risk = "LOW"
+        risk = "LOW RISK"
+
 
     # --------------------------------------------------------
-    # No reasons
+    # WARNINGS
     # --------------------------------------------------------
 
-    if not reasons:
+    warnings = []
 
-        reasons.append(
-            "No major phishing indicators detected"
+
+    if impersonation:
+
+        warnings.append(
+            "Possible "
+            + impersonation["attack_type"]
+            + " impersonating "
+            + impersonation["brand"]
         )
 
+
+    if legitimate:
+
+        warnings.append(
+            "Known legitimate domain: "
+            + str(brand)
+        )
+
+
     # --------------------------------------------------------
-    # Final result
+    # FINAL RESULT
     # --------------------------------------------------------
 
-    return {
+    result = {
 
         "risk":
             risk,
@@ -1023,69 +836,52 @@ def predict(url):
             score,
 
         "phishing_probability":
-            round(
-                ml_probability,
-                2
-            ),
-
-        "domain":
-            domain,
-
-        "ml_prediction":
-            ml_prediction,
-
-        "ml_probability":
-            round(
-                ml_probability,
-                2
-            ),
-
-        "impersonation":
-            impersonation,
-
-        "known_legitimate":
-            False,
-
-        "unicode_analysis":
-            unicode_analysis,
+            phishing_probability,
 
         "features":
             features,
 
-        "reasons":
-            reasons
+        "domain":
+            domain,
+
+        "brand_impersonation":
+            impersonation,
+
+        "legitimate_domain":
+            legitimate,
+
+        "official_brand":
+            brand,
+
+        "official_domain":
+            official_domain,
+
+        "warnings":
+            warnings
+
     }
 
 
-# ============================================================
-# COMMAND LINE
-# ============================================================
-
-if __name__ == "__main__":
-
-    if len(sys.argv) < 2:
-
-        print(
-            json.dumps(
-                {
-                    "error":
-                        "URL is required"
-                },
-                indent=2
-            )
-        )
-
-        sys.exit(1)
-
-    url = sys.argv[1]
-
-    result = predict(
-        url
-    )
+    # ========================================================
+    # IMPORTANT
+    # Node.js reads stdout and expects JSON.
+    # ========================================================
 
     print(
         json.dumps(
             result,
-            indent=2
+            ensure_ascii=False
         )
     )
+
+
+except Exception as error:
+
+    print(
+        json.dumps({
+            "error":
+                str(error)
+        })
+    )
+
+    sys.exit(1)

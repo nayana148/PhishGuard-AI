@@ -1,55 +1,45 @@
 {
   "google": [
-    "google.com",
-    "google.co.in"
+    "google.com"
   ],
-  "microsoft": [
-    "microsoft.com",
-    "microsoftonline.com",
-    "office.com",
-    "outlook.com"
-  ],
-  "apple": [
-    "apple.com"
-  ],
-  "amazon": [
-    "amazon.com",
-    "amazon.in"
-  ],
+
   "paypal": [
     "paypal.com"
   ],
+
+  "microsoft": [
+    "microsoft.com"
+  ],
+
+  "amazon": [
+    "amazon.com"
+  ],
+
+  "apple": [
+    "apple.com"
+  ],
+
   "facebook": [
     "facebook.com"
   ],
+
   "instagram": [
     "instagram.com"
   ],
+
   "linkedin": [
     "linkedin.com"
   ],
+
   "github": [
     "github.com"
   ],
-  "youtube": [
-    "youtube.com"
+
+  "openai": [
+    "openai.com"
   ],
-  "netflix": [
-    "netflix.com"
-  ],
-  "whatsapp": [
-    "whatsapp.com"
-  ],
-  "adobe": [
-    "adobe.com"
-  ],
-  "spotify": [
-    "spotify.com"
-  ],
-  "dropbox": [
-    "dropbox.com"
-  ],
-  "zoom": [
-    "zoom.us"
+
+  "chatgpt": [
+    "chatgpt.com"
   ]
 }
